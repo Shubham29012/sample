@@ -12,14 +12,6 @@ type Shape = ShapeRect | ShapeCircle | ShapePoly;
 
 type Zone = "INSIDE" | "OUTSIDE_NEAR" | "OUTSIDE_FAR";
 
-/** ---------- Inline fallback shapes ---------- */
-const INLINE_SHAPES: Shape[] = [
-  { id: "triangle", name: "Triangle", type: "polygon", points: [[350, 60], [130, 460], [570, 460]] },
-  { id: "rectangle", name: "Rectangle", type: "rect", x: 160, y: 140, width: 380, height: 260 },
-  { id: "circle", name: "Circle", type: "circle", cx: 350, cy: 250, r: 180 },
-  { id: "kite", name: "Kite", type: "polygon", points: [[350, 70], [170, 260], [350, 450], [530, 260]] },
-];
-
 export default function PaintCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -30,6 +22,7 @@ export default function PaintCanvas() {
   const [shape, setShape] = useState<Shape | null>(null);
   const [currentShapeIndex, setCurrentShapeIndex] = useState(0);
   const [shapesLoaded, setShapesLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [brushColor, setBrushColor] = useState<string>("");
@@ -44,7 +37,7 @@ export default function PaintCanvas() {
 
   const lastZoneRef = useRef<Zone | null>(null);
 
-  /** ---------- Load shapes (public/shapes.json or fallback) ---------- */
+  /** ---------- Load shapes from public/shapes.json ONLY ---------- */
   useEffect(() => {
     let cancelled = false;
     const loadShapes = async () => {
@@ -53,13 +46,18 @@ export default function PaintCanvas() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const loaded: Shape[] = await res.json();
         if (!cancelled) {
-          setShapes(loaded);
+          setShapes(Array.isArray(loaded) ? loaded : []);
           setShapesLoaded(true);
+          if (!Array.isArray(loaded) || loaded.length === 0) {
+            setLoadError("No shapes found in /public/shapes.json");
+          }
         }
-      } catch {
+      } catch (err: any) {
         if (!cancelled) {
-          setShapes(INLINE_SHAPES);
+          setShapes([]);
           setShapesLoaded(true);
+          setLoadError("Failed to load /public/shapes.json");
+          console.error("Shapes load error:", err);
         }
       }
     };
@@ -174,8 +172,7 @@ export default function PaintCanvas() {
     if (s.type === "rect")
       return p.x >= s.x && p.x <= s.x + s.width && p.y >= s.y && p.y <= s.y + s.height;
     if (s.type === "circle") {
-      const dx = p.x - s.cx,
-        dy = p.y - s.cy;
+      const dx = p.x - s.cx, dy = p.y - s.cy;
       return dx * dx + dy * dy <= s.r * s.r;
     }
     return pointInPolygon(p, s.points);
@@ -200,27 +197,16 @@ export default function PaintCanvas() {
       const j = (i + 1) % pts.length;
       const [x1, y1] = pts[i];
       const [x2, y2] = pts[j];
-      const A = p.x - x1,
-        B = p.y - y1,
-        C = x2 - x1,
-        D = y2 - y1;
+      const A = p.x - x1, B = p.y - y1, C = x2 - x1, D = y2 - y1;
       const dot = A * C + B * D;
       const lenSq = C * C + D * D;
       let param = -1;
       if (lenSq !== 0) param = dot / lenSq;
       let xx, yy;
-      if (param < 0) {
-        xx = x1;
-        yy = y1;
-      } else if (param > 1) {
-        xx = x2;
-        yy = y2;
-      } else {
-        xx = x1 + param * C;
-        yy = y1 + param * D;
-      }
-      const dx = p.x - xx,
-        dy = p.y - yy;
+      if (param < 0) { xx = x1; yy = y1; }
+      else if (param > 1) { xx = x2; yy = y2; }
+      else { xx = x1 + param * C; yy = y1 + param * D; }
+      const dx = p.x - xx, dy = p.y - yy;
       minDist = Math.min(minDist, Math.sqrt(dx * dx + dy * dy));
     }
     return minDist;
@@ -324,15 +310,11 @@ export default function PaintCanvas() {
     if (!ctx || !shape) return;
     const img = ctx.getImageData(0, 0, canvasSize.width, canvasSize.height);
     const data = img.data;
-    let inShape = 0,
-      painted = 0;
+    let inShape = 0, painted = 0;
     for (let y = 0; y < canvasSize.height; y += 2) {
       for (let x = 0; x < canvasSize.width; x += 2) {
         const idx = (y * canvasSize.width + x) * 4;
-        const r = data[idx],
-          g = data[idx + 1],
-          b = data[idx + 2],
-          a = data[idx + 3];
+        const r = data[idx], g = data[idx + 1], b = data[idx + 2], a = data[idx + 3];
         const isPaint = a > 0 && !(r > 245 && g > 245 && b > 245); // not white bg
         const p = { x, y };
         if (pointInShape(p, shape)) {
@@ -358,7 +340,7 @@ export default function PaintCanvas() {
   };
 
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (timeLeft <= 0 || !ctx) return;
+    if (timeLeft <= 0 || !ctx || !shape) return; // block drawing when no shape
     e.preventDefault();
     setStarted(true);
     setIsDrawing(true);
@@ -375,7 +357,7 @@ export default function PaintCanvas() {
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !ctx || timeLeft <= 0) return;
+    if (!isDrawing || !ctx || timeLeft <= 0 || !shape) return;
     e.preventDefault();
     const p = getCanvasPos(e);
     const z = getZoneForPoint(p);
@@ -483,6 +465,19 @@ export default function PaintCanvas() {
       <div className="min-h-screen bg-gray-50 p-4 flex items-center justify-center">
         <div className="text-center">
           <div className="text-xl text-gray-600">Loading shapes...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (shapesLoaded && shapes.length === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-4 flex items-center justify-center">
+        <div className="max-w-md text-center bg-white p-6 rounded-lg shadow">
+          <h2 className="text-lg font-semibold text-gray-800 mb-2">No shapes available</h2>
+          <p className="text-sm text-gray-600">
+            {loadError ?? "Add a valid shapes.json under /public to begin."}
+          </p>
         </div>
       </div>
     );
