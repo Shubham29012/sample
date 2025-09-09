@@ -12,12 +12,12 @@ type Shape = ShapeRect | ShapeCircle | ShapePoly;
 
 type Zone = "INSIDE" | "OUTSIDE_NEAR" | "OUTSIDE_FAR";
 
-// Fallback shapes if JSON loading fails
-const FALLBACK_SHAPES: Shape[] = [
+/** ---------- Inline fallback shapes ---------- */
+const INLINE_SHAPES: Shape[] = [
   { id: "triangle", name: "Triangle", type: "polygon", points: [[350, 60], [130, 460], [570, 460]] },
   { id: "rectangle", name: "Rectangle", type: "rect", x: 160, y: 140, width: 380, height: 260 },
   { id: "circle", name: "Circle", type: "circle", cx: 350, cy: 250, r: 180 },
-  { id: "kite", name: "Kite", type: "polygon", points: [[350, 70], [170, 260], [350, 450], [530, 260]] }
+  { id: "kite", name: "Kite", type: "polygon", points: [[350, 70], [170, 260], [350, 450], [530, 260]] },
 ];
 
 export default function PaintCanvas() {
@@ -26,7 +26,6 @@ export default function PaintCanvas() {
   const [ctx, setCtx] = useState<CanvasRenderingContext2D | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 700, height: 500 });
 
-  // shapes data
   const [shapes, setShapes] = useState<Shape[]>([]);
   const [shape, setShape] = useState<Shape | null>(null);
   const [currentShapeIndex, setCurrentShapeIndex] = useState(0);
@@ -45,32 +44,36 @@ export default function PaintCanvas() {
 
   const lastZoneRef = useRef<Zone | null>(null);
 
-  // Load shapes from JSON
+  /** ---------- Load shapes (public/shapes.json or fallback) ---------- */
   useEffect(() => {
+    let cancelled = false;
     const loadShapes = async () => {
       try {
-        const response = await fetch("/shapes.json");
-        if (response.ok) {
-          const loadedShapes: Shape[] = await response.json();
-          setShapes(loadedShapes);
+        const res = await fetch("/shapes.json", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const loaded: Shape[] = await res.json();
+        if (!cancelled) {
+          setShapes(loaded);
           setShapesLoaded(true);
-        } else {
-          throw new Error("Failed to load shapes.json");
         }
-      } catch (error) {
-        console.warn("Could not load shapes.json, using fallback shapes:", error);
-        setShapes(FALLBACK_SHAPES);
-        setShapesLoaded(true);
+      } catch {
+        if (!cancelled) {
+          setShapes(INLINE_SHAPES);
+          setShapesLoaded(true);
+        }
       }
     };
     loadShapes();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Responsive canvas sizing
+  /** ---------- Responsive canvas sizing ---------- */
   const updateCanvasSize = useCallback(() => {
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth - 32; // padding
-    const maxWidth = Math.min(700, containerWidth);
+    const maxWidth = Math.min(700, Math.max(300, containerWidth));
     const aspectRatio = 500 / 700;
     const height = Math.round(maxWidth * aspectRatio);
     setCanvasSize({ width: Math.round(maxWidth), height });
@@ -82,87 +85,78 @@ export default function PaintCanvas() {
     return () => window.removeEventListener("resize", updateCanvasSize);
   }, [updateCanvasSize]);
 
-  // Scale shapes based on canvas size
+  /** ---------- Scale shape to current canvas ---------- */
   const scaleShape = useCallback(
-    (originalShape: Shape): Shape => {
+    (original: Shape): Shape => {
       const scaleX = canvasSize.width / 700;
       const scaleY = canvasSize.height / 500;
-
-      if (originalShape.type === "rect") {
+      if (original.type === "rect") {
         return {
-          ...originalShape,
-          x: originalShape.x * scaleX,
-          y: originalShape.y * scaleY,
-          width: originalShape.width * scaleX,
-          height: originalShape.height * scaleY
+          ...original,
+          x: original.x * scaleX,
+          y: original.y * scaleY,
+          width: original.width * scaleX,
+          height: original.height * scaleY,
         };
       }
-
-      if (originalShape.type === "circle") {
+      if (original.type === "circle") {
         return {
-          ...originalShape,
-          cx: originalShape.cx * scaleX,
-          cy: originalShape.cy * scaleY,
-          r: originalShape.r * Math.min(scaleX, scaleY)
+          ...original,
+          cx: original.cx * scaleX,
+          cy: original.cy * scaleY,
+          r: original.r * Math.min(scaleX, scaleY),
         };
       }
-
-      // polygon
       return {
-        ...originalShape,
-        points: originalShape.points.map(([x, y]) => [x * scaleX, y * scaleY])
+        ...original,
+        points: original.points.map(([x, y]) => [x * scaleX, y * scaleY]),
       };
     },
     [canvasSize]
   );
 
-  // Initialize with random shape when shapes are loaded
+  /** ---------- Pick initial shape when shapes load ---------- */
   useEffect(() => {
     if (!shapesLoaded || shapes.length === 0) return;
-    const randomIndex = Math.floor(Math.random() * shapes.length);
-    setCurrentShapeIndex(randomIndex);
-    const scaledShape = scaleShape(shapes[randomIndex]);
-    setShape(scaledShape);
+    const idx = Math.floor(Math.random() * shapes.length);
+    setCurrentShapeIndex(idx);
+    setShape(scaleShape(shapes[idx]));
   }, [shapesLoaded, shapes, scaleShape]);
 
-  // Update shape when canvas size changes
+  /** ---------- Rerender scaled shape on size change ---------- */
   useEffect(() => {
-    if (!shapesLoaded || currentShapeIndex >= shapes.length || currentShapeIndex < 0) return;
-    const scaledShape = scaleShape(shapes[currentShapeIndex]);
-    setShape(scaledShape);
+    if (!shapesLoaded || currentShapeIndex < 0 || currentShapeIndex >= shapes.length) return;
+    setShape(scaleShape(shapes[currentShapeIndex]));
   }, [canvasSize, currentShapeIndex, scaleShape, shapesLoaded, shapes]);
 
   /** ---------- Init canvas ---------- */
+  const paintBackground = useCallback(
+    (c: CanvasRenderingContext2D) => {
+      c.save();
+      c.globalCompositeOperation = "source-over";
+      c.fillStyle = "#ffffff";
+      c.fillRect(0, 0, canvasSize.width, canvasSize.height);
+      c.restore();
+    },
+    [canvasSize]
+  );
+
   useEffect(() => {
     const c = canvasRef.current;
     if (!c) return;
-
-    // 2D context with read-optimization for getImageData
-    const context = c.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D | null;
+    const context = c.getContext("2d", { willReadFrequently: true });
     if (!context) return;
 
     const dpr = Math.max(window.devicePixelRatio || 1, 1);
-
-    // Set backing store size in device pixels
     c.width = Math.floor(canvasSize.width * dpr);
     c.height = Math.floor(canvasSize.height * dpr);
-
-    // Set displayed size in CSS pixels
     c.style.width = `${canvasSize.width}px`;
     c.style.height = `${canvasSize.height}px`;
-
-    // Map 1 unit to 1 CSS pixel
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // White background
-    context.save();
-    context.globalCompositeOperation = "source-over";
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, canvasSize.width, canvasSize.height);
-    context.restore();
-
+    paintBackground(context);
     setCtx(context);
-  }, [canvasSize]);
+  }, [canvasSize, paintBackground]);
 
   /** ---------- Geometry helpers ---------- */
   function pointInPolygon(p: Pt, polygon: number[][]) {
@@ -177,7 +171,8 @@ export default function PaintCanvas() {
   }
 
   function pointInShape(p: Pt, s: Shape) {
-    if (s.type === "rect") return p.x >= s.x && p.x <= s.x + s.width && p.y >= s.y && p.y <= s.y + s.height;
+    if (s.type === "rect")
+      return p.x >= s.x && p.x <= s.x + s.width && p.y >= s.y && p.y <= s.y + s.height;
     if (s.type === "circle") {
       const dx = p.x - s.cx,
         dy = p.y - s.cy;
@@ -193,32 +188,26 @@ export default function PaintCanvas() {
       const dy = Math.max(0, Math.max(y - p.y, p.y - (y + height)));
       return Math.sqrt(dx * dx + dy * dy);
     }
-
     if (s.type === "circle") {
       const dx = p.x - s.cx;
       const dy = p.y - s.cy;
       const distToCenter = Math.sqrt(dx * dx + dy * dy);
       return Math.abs(distToCenter - s.r);
     }
-
-    // polygon
     let minDist = Infinity;
-    const points = s.points;
-    for (let i = 0; i < points.length; i++) {
-      const j = (i + 1) % points.length;
-      const [x1, y1] = points[i];
-      const [x2, y2] = points[j];
-
-      const A = p.x - x1;
-      const B = p.y - y1;
-      const C = x2 - x1;
-      const D = y2 - y1;
-
+    const pts = s.points;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      const [x1, y1] = pts[i];
+      const [x2, y2] = pts[j];
+      const A = p.x - x1,
+        B = p.y - y1,
+        C = x2 - x1,
+        D = y2 - y1;
       const dot = A * C + B * D;
       const lenSq = C * C + D * D;
       let param = -1;
       if (lenSq !== 0) param = dot / lenSq;
-
       let xx, yy;
       if (param < 0) {
         xx = x1;
@@ -230,11 +219,9 @@ export default function PaintCanvas() {
         xx = x1 + param * C;
         yy = y1 + param * D;
       }
-
-      const dx = p.x - xx;
-      const dy = p.y - yy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      minDist = Math.min(minDist, dist);
+      const dx = p.x - xx,
+        dy = p.y - yy;
+      minDist = Math.min(minDist, Math.sqrt(dx * dx + dy * dy));
     }
     return minDist;
   }
@@ -242,29 +229,21 @@ export default function PaintCanvas() {
   /** ---------- Zone + colors ---------- */
   function getZoneForPoint(p: Pt): Zone {
     if (!shape) return "OUTSIDE_FAR";
-
-    if (pointInShape(p, shape)) {
-      return "INSIDE";
-    }
-
-    // Convert pixels to mm (assuming ~96 DPI)
+    if (pointInShape(p, shape)) return "INSIDE";
     const pixelsPerMm = 3.78;
-    const distanceInPixels = distanceToShapeOutline(p, shape);
-    const distanceInMm = distanceInPixels / pixelsPerMm;
-
+    const distanceInMm = distanceToShapeOutline(p, shape) / pixelsPerMm;
     return distanceInMm <= 10 ? "OUTSIDE_NEAR" : "OUTSIDE_FAR";
   }
 
   function colorForZone(zone: Zone) {
-    if (zone === "OUTSIDE_NEAR") return "#fca5a5"; // Light red
-    if (zone === "OUTSIDE_FAR") return "#ff0000"; // Red
-    return brushColor || "transparent"; // User's color for inside
+    if (zone === "OUTSIDE_NEAR") return "#fca5a5";
+    if (zone === "OUTSIDE_FAR") return "#ff0000";
+    return brushColor || "transparent";
   }
 
   function handleZoneTransition(newZone: Zone) {
     const prev = lastZoneRef.current;
     if (prev === newZone) return;
-
     if (newZone === "OUTSIDE_NEAR") setNearCount((n) => n + 1);
     if (newZone === "OUTSIDE_FAR") setFarCount((n) => n + 1);
     if (prev === "INSIDE" && (newZone === "OUTSIDE_NEAR" || newZone === "OUTSIDE_FAR")) {
@@ -282,26 +261,27 @@ export default function PaintCanvas() {
       c.arc(s.cx, s.cy, s.r, 0, Math.PI * 2);
     } else {
       const pts = s.points;
-      c.moveTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
-      c.closePath();
+      if (pts.length > 0) {
+        c.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
+        c.closePath();
+      }
     }
   }, []);
 
-  // High-contrast outline that remains visible on any background/DPR.
   const drawShapeOutline = useCallback(
     (s: Shape) => {
       if (!ctx) return;
       ctx.save();
       ctx.globalCompositeOperation = "source-over";
 
-      // Outer light stroke (acts like a halo)
+      // Halo
       traceShapePath(s, ctx);
       ctx.lineWidth = 6;
       ctx.strokeStyle = "#ffffff";
       ctx.stroke();
 
-      // Inner dark stroke
+      // Inner stroke
       traceShapePath(s, ctx);
       ctx.lineWidth = 3;
       ctx.strokeStyle = "#111111";
@@ -314,33 +294,27 @@ export default function PaintCanvas() {
 
   const clearCanvas = useCallback(() => {
     if (!ctx) return;
-    ctx.save();
-    ctx.globalCompositeOperation = "source-over";
-    ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvasSize.width, canvasSize.height);
-    ctx.restore();
-  }, [ctx, canvasSize]);
+    paintBackground(ctx);
+  }, [ctx, paintBackground]);
 
-  const redrawAll = useCallback(() => {
-    if (!shape) return;
-    clearCanvas();
+  const redrawOutline = useCallback(() => {
+    if (!ctx || !shape) return;
     drawShapeOutline(shape);
-  }, [shape, clearCanvas, drawShapeOutline]);
+  }, [ctx, shape, drawShapeOutline]);
 
-  /** ---------- Redraw when context/shape changes ---------- */
+  /** Keep outline visible when ctx/shape appear */
   useEffect(() => {
     if (!ctx || !shape) return;
-    // draw after layout to avoid race conditions
-    requestAnimationFrame(() => redrawAll());
-  }, [ctx, shape, redrawAll]);
+    clearCanvas();
+    redrawOutline();
+  }, [ctx, shape, clearCanvas, redrawOutline]);
 
   function drawPointerDot(p: Pt, color: string) {
-    if (!ctx) return;
-    const radius = Math.max(2, Math.round(brushSize / 2));
+    if (!ctx || color === "transparent") return;
+    const r = Math.max(2, Math.round(brushSize / 2));
     ctx.save();
     ctx.beginPath();
-    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
     ctx.restore();
@@ -352,8 +326,6 @@ export default function PaintCanvas() {
     const data = img.data;
     let inShape = 0,
       painted = 0;
-
-    // sample every 2px for speed
     for (let y = 0; y < canvasSize.height; y += 2) {
       for (let x = 0; x < canvasSize.width; x += 2) {
         const idx = (y * canvasSize.width + x) * 4;
@@ -361,9 +333,7 @@ export default function PaintCanvas() {
           g = data[idx + 1],
           b = data[idx + 2],
           a = data[idx + 3];
-
-        // any non-white, non-transparent pixel counts as paint
-        const isPaint = a > 0 && !(r > 245 && g > 245 && b > 245);
+        const isPaint = a > 0 && !(r > 245 && g > 245 && b > 245); // not white bg
         const p = { x, y };
         if (pointInShape(p, shape)) {
           inShape++;
@@ -371,8 +341,7 @@ export default function PaintCanvas() {
         }
       }
     }
-    const percent = Math.round((painted / Math.max(1, inShape)) * 100);
-    setCoverage(Math.min(100, percent));
+    setCoverage(Math.min(100, Math.round((painted / Math.max(1, inShape)) * 100)));
   }
 
   /** ---------- Timer ---------- */
@@ -396,20 +365,13 @@ export default function PaintCanvas() {
     lastZoneRef.current = null;
 
     const p = getCanvasPos(e);
-    ctx.save();
-    ctx.globalCompositeOperation = "source-over";
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y);
-    ctx.restore();
-
     const z = getZoneForPoint(p);
     handleZoneTransition(z);
     const col = colorForZone(z);
-    if (col !== "transparent") drawPointerDot(p, col);
+    drawPointerDot(p, col);
 
-    try {
-      (e.target as Element & { setPointerCapture?: (id: number) => void }).setPointerCapture?.(e.pointerId);
-    } catch {}
+    (e.target as Element & { setPointerCapture?: (id: number) => void }).setPointerCapture?.(e.pointerId);
+    redrawOutline(); // keep outline visible
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -425,38 +387,79 @@ export default function PaintCanvas() {
     ctx.lineWidth = brushSize;
     ctx.lineCap = "round";
     ctx.strokeStyle = col;
-    ctx.lineTo(p.x, p.y);
-    ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + 0.001, p.y + 0.001); // micro-segment for continuous dots
+    ctx.stroke();
+    ctx.closePath();
     ctx.restore();
 
-    if (col !== "transparent") drawPointerDot(p, col);
+    drawPointerDot(p, col);
+    redrawOutline(); // keep outline on top after each move
   };
 
-  const onPointerUp = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
+  const endStroke = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
     setIsDrawing(false);
-    ctx?.closePath();
-    if (e) {
-      try {
-        (e.target as Element & { releasePointerCapture?: (id: number) => void }).releasePointerCapture?.(e.pointerId);
-      } catch {}
-    }
+    if (e) (e.target as Element & { releasePointerCapture?: (id: number) => void }).releasePointerCapture?.(e.pointerId);
     if (shape) computeCoverage();
-
-    // ensure outline stays visible on top after paint
-    redrawAll();
+    redrawOutline();
   };
 
-  /** ---------- UI ---------- */
-  const prominentColors: { color: string; name: string }[] = [
+  /** ---------- Shape controls (no page refresh needed) ---------- */
+  const resetStats = useCallback(() => {
+    setOutlineCrossings(0);
+    setNearCount(0);
+    setFarCount(0);
+    setCoverage(0);
+    setTimeLeft(60);
+    setStarted(false);
+    lastZoneRef.current = null;
+  }, []);
+
+  const applyShapeIndex = useCallback(
+    (idx: number) => {
+      if (!shapesLoaded || shapes.length === 0) return;
+      const bounded = ((idx % shapes.length) + shapes.length) % shapes.length;
+      setCurrentShapeIndex(bounded);
+      const s = scaleShape(shapes[bounded]);
+      setShape(s);
+      if (ctx) {
+        clearCanvas();
+        drawShapeOutline(s);
+      }
+      resetStats();
+    },
+    [shapesLoaded, shapes, scaleShape, ctx, clearCanvas, drawShapeOutline, resetStats]
+  );
+
+  const nextShape = () => applyShapeIndex(currentShapeIndex + 1);
+  const prevShape = () => applyShapeIndex(currentShapeIndex - 1);
+  const randomShape = () => applyShapeIndex(Math.floor(Math.random() * Math.max(1, shapes.length)));
+
+  const resetCanvas = () => {
+    if (!ctx || !shape) return;
+    clearCanvas();
+    drawShapeOutline(shape);
+    resetStats();
+  };
+
+  /** Keyboard shortcut: N for next */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "n") nextShape();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [nextShape]);
+
+  /** ---------- UI colors ---------- */
+  const prominentColors = [
     { color: "#ffff00", name: "Yellow" },
     { color: "#0000ff", name: "Blue" },
     { color: "#ff69b4", name: "Pink" },
-    { color: "#00ff00", name: "Green" }
+    { color: "#00ff00", name: "Green" },
   ];
-
-  const otherColors: { color: string; name: string }[] = [
+  const otherColors = [
     { color: "#ffffff", name: "White" },
     { color: "#000000", name: "Black" },
     { color: "#ff0090", name: "Magenta" },
@@ -472,10 +475,9 @@ export default function PaintCanvas() {
     { color: "#cc9900", name: "Mustard" },
     { color: "#9933ff", name: "Purple" },
     { color: "#66ffff", name: "Light Cyan" },
-    { color: "#ff4444", name: "Coral" }
+    { color: "#ff4444", name: "Coral" },
   ];
 
-  // Show loading state
   if (!shapesLoaded) {
     return (
       <div className="min-h-screen bg-gray-50 p-4 flex items-center justify-center">
@@ -497,90 +499,131 @@ export default function PaintCanvas() {
           </div>
         )}
 
-        {/* Shape and timer info */}
         <div className="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
           <div className="text-lg font-semibold">
             Shape: <span className="text-blue-600">{shape?.name || "—"}</span>
           </div>
-          <div className="flex items-center gap-4">
-            <div
-              className={`text-xl font-bold px-4 py-2 rounded-lg ${
-                timeLeft <= 10 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
-              }`}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={prevShape}
+              className="px-3 py-1.5 text-sm rounded-md border bg-gray-50 hover:bg-gray-100"
+              title="Previous shape"
             >
+              ◀ Prev
+            </button>
+            <button
+              onClick={nextShape}
+              className="px-3 py-1.5 text-sm rounded-md border bg-gray-50 hover:bg-gray-100"
+              title="Next shape (N)"
+            >
+              Next ▶
+            </button>
+            <button
+              onClick={randomShape}
+              className="px-3 py-1.5 text-sm rounded-md border bg-gray-50 hover:bg-gray-100"
+              title="Random shape"
+            >
+              🎲 Random
+            </button>
+            <div className={`text-xl font-bold px-4 py-2 rounded-lg ${timeLeft <= 10 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>
               ⏰ {timeLeft}s
             </div>
           </div>
         </div>
 
-        {/* Quick colors - mobile friendly */}
-        <div className="mb-4">
-          <div className="text-sm font-medium text-gray-700 mb-2">Quick colors:</div>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {prominentColors.map((c) => (
-              <button
-                key={c.color}
-                onClick={() => setBrushColor(c.color)}
-                title={c.name}
-                className={`w-10 h-10 rounded-full border-2 hover:scale-110 transition-transform ${
-                  brushColor === c.color ? "border-gray-800 border-4" : "border-gray-400"
-                }`}
-                style={{ backgroundColor: c.color }}
-                aria-label={`select ${c.name}`}
-              />
-            ))}
-          </div>
-        </div>
-
-        {/* Controls - responsive layout */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-          <div>
-            <label htmlFor="colorSelect" className="block text-sm font-medium text-gray-700 mb-1">
-              More colors:
-            </label>
-            <select
-              id="colorSelect"
-              value={brushColor}
-              onChange={(e) => setBrushColor(e.target.value)}
-              className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="" disabled>
-                Pick a color…
-              </option>
-              <optgroup label="Quick Colors">
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <div className="text-sm font-medium text-gray-700 mb-2">Quick colors:</div>
+              <div className="flex flex-wrap gap-2">
                 {prominentColors.map((c) => (
-                  <option key={c.color} value={c.color}>
-                    {c.name}
+                  <button
+                    key={c.color}
+                    onClick={() => setBrushColor(c.color)}
+                    title={c.name}
+                    className={`w-10 h-10 rounded-full border-2 hover:scale-110 transition-transform ${brushColor === c.color ? "border-gray-800 border-4" : "border-gray-400"}`}
+                    style={{ backgroundColor: c.color }}
+                    aria-label={`select ${c.name}`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="colorSelect" className="block text-sm font-medium text-gray-700 mb-1">
+                More colors:
+              </label>
+              <select
+                id="colorSelect"
+                value={brushColor}
+                onChange={(e) => setBrushColor(e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="" disabled>
+                  Pick a color…
+                </option>
+                <optgroup label="Quick Colors">
+                  {prominentColors.map((c) => (
+                    <option key={c.color} value={c.color}>
+                      {c.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Other Colors">
+                  {otherColors.map((c) => (
+                    <option key={c.color} value={c.color}>
+                      {c.name}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="brushSize" className="block text-sm font-medium text-gray-700 mb-1">
+                Brush size: {brushSize}px
+              </label>
+              <input
+                id="brushSize"
+                type="range"
+                min={6}
+                max={20}
+                value={brushSize}
+                onChange={(e) => setBrushSize(parseInt(e.target.value, 10))}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="shapeSelect" className="block text-sm font-medium text-gray-700 mb-1">
+                Choose shape:
+              </label>
+              <select
+                id="shapeSelect"
+                value={currentShapeIndex}
+                onChange={(e) => applyShapeIndex(parseInt(e.target.value, 10))}
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                {shapes.map((s, i) => (
+                  <option key={s.id ?? `${s.type}-${i}`} value={i}>
+                    {s.name ?? `${s.type} ${i + 1}`}
                   </option>
                 ))}
-              </optgroup>
-              <optgroup label="Other Colors">
-                {otherColors.map((c) => (
-                  <option key={c.color} value={c.color}>
-                    {c.name}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
+              </select>
+            </div>
           </div>
 
-          <div>
-            <label htmlFor="brushSize" className="block text-sm font-medium text-gray-700 mb-1">
-              Brush size: {brushSize}px
-            </label>
-            <input
-              id="brushSize"
-              type="range"
-              min={6}
-              max={20}
-              value={brushSize}
-              onChange={(e) => setBrushSize(parseInt(e.target.value, 10))}
-              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            />
+          <div className="flex items-end">
+            <button
+              onClick={resetCanvas}
+              className="px-4 py-2 h-10 rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+              title="Clear the canvas and restart timer"
+            >
+              ♻ Reset Canvas
+            </button>
           </div>
         </div>
 
-        {/* Canvas */}
         <div className="mb-4 flex justify-center">
           <div className="relative">
             <canvas
@@ -588,18 +631,13 @@ export default function PaintCanvas() {
               width={canvasSize.width}
               height={canvasSize.height}
               className="border-2 border-gray-300 rounded-lg shadow-sm bg-white touch-none"
-              style={{
-                width: `${canvasSize.width}px`,
-                height: `${canvasSize.height}px`,
-                maxWidth: "100%",
-                touchAction: "none" // important for pen/touch devices
-              }}
+              style={{ width: `${canvasSize.width}px`, height: `${canvasSize.height}px`, maxWidth: "100%", touchAction: "none" }}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerLeave={onPointerUp}
+              onPointerUp={endStroke}
+              onPointerLeave={endStroke}
+              onPointerCancel={endStroke}
             />
-            {/* Debug info */}
             {!shape && (
               <div className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-75 rounded-lg">
                 <div className="text-gray-500 text-center">
@@ -613,7 +651,6 @@ export default function PaintCanvas() {
           </div>
         </div>
 
-        {/* Legend - responsive */}
         <div className="mb-4">
           <div className="text-sm font-medium text-gray-700 mb-2">Legend:</div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
@@ -623,7 +660,6 @@ export default function PaintCanvas() {
           </div>
         </div>
 
-        {/* Metrics - responsive grid */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <Metric label="Outline crossings" value={outlineCrossings} />
           <Metric label="Near crossings (≤10mm)" value={nearCount} />
@@ -636,7 +672,7 @@ export default function PaintCanvas() {
   );
 }
 
-/** ---------- UI helpers ---------- */
+/** ---------- UI bits ---------- */
 function Legend({ color, label }: { color: string; label: string }) {
   return (
     <div className="flex items-center gap-2">
