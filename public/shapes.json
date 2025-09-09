@@ -1,0 +1,31 @@
+[
+  {
+    "id": "triangle",
+    "name": "Triangle",
+    "type": "polygon",
+    "points": [[350, 60], [130, 460], [570, 460]]
+  },
+  {
+    "id": "rectangle",
+    "name": "Rectangle", 
+    "type": "rect",
+    "x": 160,
+    "y": 140,
+    "width": 380,
+    "height": 260
+  },
+  {
+    "id": "circle",
+    "name": "Circle",
+    "type": "circle",
+    "cx": 350,
+    "cy": 250,
+    "r": 180
+  },
+  {
+    "id": "kite",
+    "name": "Kite",
+    "type": "polygon", 
+    "points": [[350, 70], [170, 260], [350, 450], [530, 260]]
+  }
+]
