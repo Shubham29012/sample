@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 /** ---------- Types ---------- */
 type Pt = { x: number; y: number };
@@ -51,8 +52,9 @@ export default function PaintCanvas() {
         const data = (await res.json()) as Shape[];
         setShapes(data);
         setShape(data[0] ?? null);
-      } catch (e: any) {
-        setShapesError(e?.message || "Failed to load shapes.json");
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        setShapesError(message || "Failed to load shapes.json");
       } finally {
         setLoadingShapes(false);
       }
@@ -75,19 +77,6 @@ export default function PaintCanvas() {
     context.fillRect(0, 0, CANVAS_W, CANVAS_H);
     setCtx(context);
   }, []);
-
-  /** ---------- Redraw when context/shape changes ---------- */
-  useEffect(() => {
-    if (!ctx || !shape) return;
-    redrawAll();
-  }, [ctx, shape]);
-
-  /** ---------- Timer ---------- */
-  useEffect(() => {
-    if (!started || timeLeft <= 0) return;
-    const t = setInterval(() => setTimeLeft((v) => (v > 0 ? v - 1 : 0)), 1000);
-    return () => clearInterval(t);
-  }, [started, timeLeft]);
 
   /** ---------- Geometry helpers ---------- */
   function pointInPolygon(p: Pt, polygon: number[][]) {
@@ -144,15 +133,15 @@ export default function PaintCanvas() {
     lastZoneRef.current = newZone;
   }
 
-  /** ---------- Drawing helpers ---------- */
-  function clearCanvas() {
+  /** ---------- Drawing helpers (memoized) ---------- */
+  const clearCanvas = useCallback(() => {
     if (!ctx) return;
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  }
+  }, [ctx]);
 
-  function drawShapeOutline(s: Shape, strokeStyle = "#111", lineWidth = 3) {
+  const drawShapeOutline = useCallback((s: Shape, strokeStyle = "#111", lineWidth = 3) => {
     if (!ctx) return;
     ctx.save();
     ctx.lineWidth = lineWidth;
@@ -170,13 +159,19 @@ export default function PaintCanvas() {
     }
     ctx.stroke();
     ctx.restore();
-  }
+  }, [ctx]);
 
-  function redrawAll() {
+  const redrawAll = useCallback(() => {
     if (!shape) return;
     clearCanvas();
     drawShapeOutline(shape, "#111", 3);
-  }
+  }, [shape, clearCanvas, drawShapeOutline]);
+
+  /** ---------- Redraw when context/shape changes ---------- */
+  useEffect(() => {
+    if (!ctx || !shape) return;
+    redrawAll();
+  }, [ctx, shape, redrawAll]);
 
   function drawPointerDot(p: Pt, color: string) {
     if (!ctx) return;
@@ -210,13 +205,20 @@ export default function PaintCanvas() {
     setCoverage(Math.min(100, percent));
   }
 
+  /** ---------- Timer ---------- */
+  useEffect(() => {
+    if (!started || timeLeft <= 0) return;
+    const t = setInterval(() => setTimeLeft((v) => (v > 0 ? v - 1 : 0)), 1000);
+    return () => clearInterval(t);
+  }, [started, timeLeft]);
+
   /** ---------- Pointer handlers ---------- */
-  const getCanvasPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const getCanvasPos = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = canvasRef.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
-  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (timeLeft <= 0 || !ctx) return;
     setStarted(true);
     setIsDrawing(true);
@@ -233,7 +235,7 @@ export default function PaintCanvas() {
     } catch {}
   };
 
-  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing || !ctx || timeLeft <= 0) return;
     const p = getCanvasPos(e);
     const z = getZoneForPoint(p);
@@ -249,7 +251,7 @@ export default function PaintCanvas() {
     ctx.moveTo(p.x, p.y);
   };
 
-  const onPointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+  const onPointerUp = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
     setIsDrawing(false);
     ctx?.closePath();
     if (e) {
@@ -421,7 +423,7 @@ function Legend({ color, label }: { color: string; label: string }) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: any }) {
+function Metric({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div style={{ padding: 8, border: "1px solid #e6edf3", borderRadius: 8 }}>
       <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
