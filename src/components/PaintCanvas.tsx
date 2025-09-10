@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from 'react';
-import { Point, Zone } from '@/types';
+import { Point, Zone, Shape } from '@/types';
 import { useShapes } from '@/hooks/useShapes';
 import { useTimer } from '@/hooks/useTimer';
 import { useCanvas } from '@/hooks/useCanvas';
@@ -18,14 +18,14 @@ export default function PaintCanvas() {
   const { timeLeft, isFinished, timeElapsed, startTimer, resetTimer } = useTimer();
   const { canvasRef, containerRef, ctx, canvasSize } = useCanvas();
 
-  const [shape, setShape] = useState<any>(null);
+  const [shape, setShape] = useState<Shape | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [brushColor, setBrushColor] = useState("");
-  const [brushSize, setBrushSize] = useState(12);
+  const [brushColor, setBrushColor] = useState<string>('');
+  const [brushSize, setBrushSize] = useState<number>(12);
 
-  const [nearCount, setNearCount] = useState(0);
-  const [farCount, setFarCount] = useState(0);
-  const [coverage, setCoverage] = useState(0);
+  const [nearCount, setNearCount] = useState<number>(0);
+  const [farCount, setFarCount] = useState<number>(0);
+  const [coverage, setCoverage] = useState<number>(0);
 
   const lastZoneRef = useRef<Zone | null>(null);
 
@@ -48,12 +48,8 @@ export default function PaintCanvas() {
     const prevZone = lastZoneRef.current;
     if (prevZone === newZone) return;
 
-    if (newZone === "OUTSIDE_NEAR") {
-      setNearCount(n => n + 1);
-    }
-    if (newZone === "OUTSIDE_FAR") {
-      setFarCount(n => n + 1);
-    }
+    if (newZone === 'OUTSIDE_NEAR') setNearCount(n => n + 1);
+    if (newZone === 'OUTSIDE_FAR') setFarCount(n => n + 1);
 
     lastZoneRef.current = newZone;
   };
@@ -90,11 +86,11 @@ export default function PaintCanvas() {
     const zone = ZoneUtils.getZoneForPoint(point, shape);
     handleZoneTransition(zone);
 
-    if (zone === "INSIDE") {
+    if (zone === 'INSIDE') {
       drawDot(point, brushColor);
     }
 
-    (e.target as any).setPointerCapture?.(e.pointerId);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     CanvasUtils.drawShapeOutline(ctx, shape);
   };
 
@@ -106,11 +102,11 @@ export default function PaintCanvas() {
     const zone = ZoneUtils.getZoneForPoint(point, shape);
     handleZoneTransition(zone);
 
-    if (zone === "INSIDE") {
+    if (zone === 'INSIDE') {
       ctx.save();
-      ctx.globalCompositeOperation = "source-over";
+      ctx.globalCompositeOperation = 'source-over';
       ctx.lineWidth = brushSize;
-      ctx.lineCap = "round";
+      ctx.lineCap = 'round';
       ctx.strokeStyle = brushColor;
       ctx.beginPath();
       ctx.moveTo(point.x, point.y);
@@ -126,7 +122,7 @@ export default function PaintCanvas() {
 
   const endStroke = (e?: React.PointerEvent<HTMLCanvasElement>) => {
     setIsDrawing(false);
-    if (e) (e.target as any).releasePointerCapture?.(e.pointerId);
+    if (e) e.currentTarget.releasePointerCapture?.(e.pointerId);
     computeCoverage();
     if (ctx && shape) CanvasUtils.drawShapeOutline(ctx, shape);
   };
@@ -187,17 +183,17 @@ export default function PaintCanvas() {
 
         <div className="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
           <div className="text-lg font-semibold">
-            Shape: <span className="text-blue-600">{currentShape?.name || "—"}</span>
+            Shape: <span className="text-blue-600">{currentShape?.name || '—'}</span>
           </div>
           <div className="flex items-center gap-2">
-            <button 
-              onClick={nextShape} 
+            <button
+              onClick={nextShape}
               className="px-3 py-1.5 text-sm rounded-md border bg-gray-50 hover:bg-gray-100"
             >
               Next Shape
             </button>
-            <button 
-              onClick={randomShape} 
+            <button
+              onClick={randomShape}
               className="px-3 py-1.5 text-sm rounded-md border bg-gray-50 hover:bg-gray-100"
             >
               🎲 Random
@@ -209,7 +205,7 @@ export default function PaintCanvas() {
         <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4 mb-4">
           <div className="grid grid-cols-1 gap-4">
             <ColorPicker brushColor={brushColor} onColorChange={setBrushColor} />
-            
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -256,12 +252,12 @@ export default function PaintCanvas() {
             width={canvasSize.width}
             height={canvasSize.height}
             className="border-2 border-gray-300 rounded-lg shadow-sm bg-white touch-none"
-            style={{ 
-              width: `${canvasSize.width}px`, 
-              height: `${canvasSize.height}px`, 
-              maxWidth: "100%", 
-              touchAction: "none",
-              cursor: brushColor ? "crosshair" : "default"
+            style={{
+              width: `${canvasSize.width}px`,
+              height: `${canvasSize.height}px`,
+              maxWidth: '100%',
+              touchAction: 'none',
+              cursor: brushColor ? 'crosshair' : 'default',
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -280,7 +276,7 @@ export default function PaintCanvas() {
 
         {isFinished && (
           <div className="p-4 bg-green-50 border-l-4 border-green-400 text-green-700">
-            <h3 className="font-bold text-lg mb-2">🎉 Time's Up! Final Results:</h3>
+            <h3 className="font-bold text-lg mb-2">🎉 Time&apos;s Up! Final Results:</h3>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>Coverage: <span className="font-bold">{coverage}%</span></div>
               <div>≤10mm movements: <span className="font-bold">{nearCount}</span></div>
