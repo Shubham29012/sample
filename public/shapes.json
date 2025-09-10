@@ -1,31 +1,31 @@
 [
   {
-    "id": "triangle",
-    "name": "Triangle",
-    "type": "polygon",
-    "points": [[350, 60], [130, 460], [570, 460]]
-  },
-  {
-    "id": "rectangle",
-    "name": "Rectangle", 
+    "id": "rect-1",
+    "name": "Rectangle",
     "type": "rect",
-    "x": 160,
-    "y": 140,
-    "width": 380,
-    "height": 260
+    "x": 200,
+    "y": 150,
+    "width": 300,
+    "height": 200
   },
   {
-    "id": "circle",
+    "id": "circle-1",
     "name": "Circle",
     "type": "circle",
     "cx": 350,
     "cy": 250,
-    "r": 180
+    "r": 120
   },
   {
-    "id": "kite",
-    "name": "Kite",
-    "type": "polygon", 
-    "points": [[350, 70], [170, 260], [350, 450], [530, 260]]
+    "id": "triangle-1",
+    "name": "Triangle",
+    "type": "polygon",
+    "points": [[350, 100], [200, 350], [500, 350]]
+  },
+  {
+    "id": "star-1",
+    "name": "Star",
+    "type": "polygon",
+    "points": [[350, 80], [380, 160], [460, 160], [400, 210], [420, 290], [350, 250], [280, 290], [300, 210], [240, 160], [320, 160]]
   }
 ]
