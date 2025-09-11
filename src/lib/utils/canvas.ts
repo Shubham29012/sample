@@ -100,8 +100,6 @@ export const CanvasUtils = {
         }
       }
     }
-
-    // ✅ Fixed: removed the extra ')'
     return Math.min(100, Math.round((painted / Math.max(1, inShape)) * 100));
   },
 };
