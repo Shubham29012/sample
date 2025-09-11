@@ -1,11 +1,13 @@
+
+
+
 "use client";
 
 import { useState, useRef, useEffect } from 'react';
+import { Stage, Layer, Line, Circle, Rect, Shape as KonvaShape } from 'react-konva';
 import { Point, Zone, Shape } from '@/types';
 import { useShapes } from '@/hooks/useShapes';
 import { useTimer } from '@/hooks/useTimer';
-import { useCanvas } from '@/hooks/useCanvas';
-import { CanvasUtils } from '@/lib/utils/canvas';
 import { ShapeUtils } from '@/lib/utils/shapes';
 import { ZoneUtils } from '@/lib/utils/zones';
 import { CANVAS_CONFIG } from '@/lib/constants';
@@ -16,7 +18,13 @@ import Timer from './Timer';
 export default function PaintCanvas() {
   const { shapes, currentShape, currentShapeIndex, loading, error, changeShape, nextShape, randomShape } = useShapes();
   const { timeLeft, isFinished, timeElapsed, startTimer, resetTimer } = useTimer();
-  const { canvasRef, containerRef, ctx, canvasSize } = useCanvas();
+
+  const stageRef = useRef(null);
+  const containerRef = useRef(null);
+  const [canvasSize, setCanvasSize] = useState({ 
+    width: CANVAS_CONFIG.DEFAULT_WIDTH, 
+    height: CANVAS_CONFIG.DEFAULT_HEIGHT 
+  });
 
   const [shape, setShape] = useState<Shape | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -27,27 +35,25 @@ export default function PaintCanvas() {
   const [farCount, setFarCount] = useState<number>(0);
   const [coverage, setCoverage] = useState<number>(0);
 
+  const [lines, setLines] = useState([]);
+  const [currentLine, setCurrentLine] = useState(null);
   const lastZoneRef = useRef<Zone | null>(null);
 
-  // --- NEW: dedicated offscreen paint layer (strokes only; no outline) ---
-  const paintCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const paintCtxRef = useRef<CanvasRenderingContext2D | null>(null);
-
-  // (Re)create the offscreen paint layer when the visible canvas size changes
+  // Update canvas size based on container
   useEffect(() => {
-    const off = document.createElement('canvas');
-    off.width = canvasSize.width;
-    off.height = canvasSize.height;
-    paintCanvasRef.current = off;
-    paintCtxRef.current = off.getContext('2d');
-    // When size changes, visible canvas is wiped too—reset stats and redraw outline.
-    resetStats();
-    if (ctx && shape) {
-      CanvasUtils.clearCanvas(ctx, canvasSize.width, canvasSize.height);
-      CanvasUtils.drawShapeOutline(ctx, shape);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canvasSize.width, canvasSize.height]);
+    const updateCanvasSize = () => {
+      if (!containerRef.current) return;
+      const containerWidth = containerRef.current.clientWidth - 32;
+      const maxWidth = Math.min(CANVAS_CONFIG.DEFAULT_WIDTH, Math.max(CANVAS_CONFIG.MIN_WIDTH, containerWidth));
+      const aspectRatio = CANVAS_CONFIG.DEFAULT_HEIGHT / CANVAS_CONFIG.DEFAULT_WIDTH;
+      const height = Math.round(maxWidth * aspectRatio);
+      setCanvasSize({ width: Math.round(maxWidth), height });
+    };
+
+    updateCanvasSize();
+    window.addEventListener("resize", updateCanvasSize);
+    return () => window.removeEventListener("resize", updateCanvasSize);
+  }, []);
 
   // Update scaled shape when current shape or canvas size changes
   useEffect(() => {
@@ -56,17 +62,6 @@ export default function PaintCanvas() {
     const scaleY = canvasSize.height / CANVAS_CONFIG.DEFAULT_HEIGHT;
     setShape(ShapeUtils.scaleShape(currentShape, scaleX, scaleY));
   }, [currentShape, canvasSize]);
-
-  // Draw (paint layer + outline) when context or shape changes
-  useEffect(() => {
-    if (!ctx || !shape) return;
-    CanvasUtils.clearCanvas(ctx, canvasSize.width, canvasSize.height);
-    // --- NEW: draw strokes first ---
-    if (paintCanvasRef.current) {
-      ctx.drawImage(paintCanvasRef.current, 0, 0);
-    }
-    CanvasUtils.drawShapeOutline(ctx, shape);
-  }, [ctx, shape, canvasSize]);
 
   const handleZoneTransition = (newZone: Zone) => {
     const prevZone = lastZoneRef.current;
@@ -78,123 +73,135 @@ export default function PaintCanvas() {
     lastZoneRef.current = newZone;
   };
 
-  const getCanvasPos = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  const getStagePos = (e): Point => {
+    const stage = e.target.getStage();
+    const pointer = stage.getPointerPosition();
+    return { x: pointer.x, y: pointer.y };
   };
 
-  // --- CHANGED: draw only to the paint layer; reflect to visible canvas after ---
-  const drawDot = (point: Point, color: string) => {
-    const pctx = paintCtxRef.current;
-    if (!pctx) return;
-    const radius = Math.max(2, Math.round(brushSize / 2));
-    pctx.save();
-    pctx.beginPath();
-    pctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-    pctx.fillStyle = color;
-    pctx.fill();
-    pctx.restore();
-
-    if (ctx && shape) {
-      CanvasUtils.clearCanvas(ctx, canvasSize.width, canvasSize.height);
-      ctx.drawImage(paintCanvasRef.current!, 0, 0);
-      CanvasUtils.drawShapeOutline(ctx, shape);
-    }
-  };
-
-  // --- CHANGED: compute coverage strictly from the paint layer, not the visible canvas ---
   const computeCoverage = () => {
-    if (!paintCtxRef.current || !shape) return;
+    if (!shape || lines.length === 0) {
+      setCoverage(0);
+      return;
+    }
 
-    const w = canvasSize.width;
-    const h = canvasSize.height;
-    const data = paintCtxRef.current.getImageData(0, 0, w, h).data;
+    // Sample points within the shape to check coverage
+    let totalPoints = 0;
+    let paintedPoints = 0;
+    const step = 3; // Sample every 3 pixels for performance
 
-    let inside = 0;
-    let paintedInside = 0;
-
-    // Scan the full canvas; if performance ever becomes a concern,
-    // you can step by 2px (x+=2, y+=2) or restrict to a shape bbox.
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        // Use ZoneUtils to avoid needing the shape path here
-        const zone = ZoneUtils.getZoneForPoint({ x: x + 0.5, y: y + 0.5 }, shape);
+    for (let y = 0; y < canvasSize.height; y += step) {
+      for (let x = 0; x < canvasSize.width; x += step) {
+        const point = { x, y };
+        const zone = ZoneUtils.getZoneForPoint(point, shape);
+        
         if (zone === 'INSIDE') {
-          inside++;
-          const alpha = data[(y * w + x) * 4 + 3];
-          if (alpha > 0) paintedInside++;
+          totalPoints++;
+          
+          // Check if this point is covered by any stroke
+          const isPainted = lines.some(line => {
+            if (!line.points || line.points.length < 4) return false;
+            
+            // Check if point is within stroke radius of any line segment
+            for (let i = 0; i < line.points.length - 2; i += 2) {
+              const x1 = line.points[i];
+              const y1 = line.points[i + 1];
+              const x2 = line.points[i + 2] || x1;
+              const y2 = line.points[i + 3] || y1;
+              
+              const distance = distanceToLineSegment(point, { x: x1, y: y1 }, { x: x2, y: y2 });
+              if (distance <= line.strokeWidth / 2) {
+                return true;
+              }
+            }
+            return false;
+          });
+          
+          if (isPainted) paintedPoints++;
         }
       }
     }
 
-    const pct = inside ? (paintedInside / inside) * 100 : 0;
-    // one decimal for nicer UX (e.g., 37.4%)
+    const pct = totalPoints ? (paintedPoints / totalPoints) * 100 : 0;
     setCoverage(Number(pct.toFixed(1)));
   };
 
-  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (isFinished || !paintCtxRef.current || !shape || !brushColor) return;
-    e.preventDefault();
+  // Helper function to calculate distance from point to line segment
+  const distanceToLineSegment = (point, lineStart, lineEnd) => {
+    const dx = lineEnd.x - lineStart.x;
+    const dy = lineEnd.y - lineStart.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    
+    if (length === 0) {
+      return Math.sqrt(
+        (point.x - lineStart.x) ** 2 + (point.y - lineStart.y) ** 2
+      );
+    }
+    
+    const t = Math.max(0, Math.min(1, 
+      ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / (length * length)
+    ));
+    
+    const projection = {
+      x: lineStart.x + t * dx,
+      y: lineStart.y + t * dy
+    };
+    
+    return Math.sqrt(
+      (point.x - projection.x) ** 2 + (point.y - projection.y) ** 2
+    );
+  };
+
+  const onPointerDown = (e) => {
+    if (isFinished || !shape || !brushColor) return;
+    
     startTimer();
     setIsDrawing(true);
     lastZoneRef.current = null;
 
-    const point = getCanvasPos(e);
+    const point = getStagePos(e);
     const zone = ZoneUtils.getZoneForPoint(point, shape);
     handleZoneTransition(zone);
 
     if (zone === 'INSIDE') {
-      drawDot(point, brushColor);
+      const newLine = {
+        points: [point.x, point.y],
+        stroke: brushColor,
+        strokeWidth: brushSize,
+        tension: 0.5,
+        lineCap: 'round',
+        lineJoin: 'round',
+      };
+      setCurrentLine(newLine);
+      setLines([...lines, newLine]);
     }
-
-    e.currentTarget.setPointerCapture?.(e.pointerId);
   };
 
-  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || isFinished || !shape || !brushColor) return;
-    e.preventDefault();
+  const onPointerMove = (e) => {
+    if (!isDrawing || isFinished || !shape || !brushColor || !currentLine) return;
 
-    const pctx = paintCtxRef.current;
-    if (!pctx) return;
-
-    const point = getCanvasPos(e);
+    const point = getStagePos(e);
     const zone = ZoneUtils.getZoneForPoint(point, shape);
     handleZoneTransition(zone);
 
     if (zone === 'INSIDE') {
-      pctx.save();
-      pctx.globalCompositeOperation = 'source-over';
-      pctx.lineWidth = brushSize;
-      pctx.lineCap = 'round';
-      pctx.strokeStyle = brushColor;
-      pctx.beginPath();
-      pctx.moveTo(point.x, point.y);
-      pctx.lineTo(point.x + 0.001, point.y + 0.001);
-      pctx.stroke();
-      pctx.restore();
-
-      // tiny dot ensures continuous strokes even for minimal movement
-      drawDot(point, brushColor);
-    }
-
-    // Refresh visible canvas
-    if (ctx && shape) {
-      CanvasUtils.clearCanvas(ctx, canvasSize.width, canvasSize.height);
-      ctx.drawImage(paintCanvasRef.current!, 0, 0);
-      CanvasUtils.drawShapeOutline(ctx, shape);
+      const updatedLine = {
+        ...currentLine,
+        points: [...currentLine.points, point.x, point.y]
+      };
+      
+      setCurrentLine(updatedLine);
+      setLines(prevLines => [
+        ...prevLines.slice(0, -1),
+        updatedLine
+      ]);
     }
   };
 
-  const endStroke = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+  const onPointerUp = () => {
     setIsDrawing(false);
-    if (e) e.currentTarget.releasePointerCapture?.(e.pointerId);
+    setCurrentLine(null);
     computeCoverage();
-    // re-draw to ensure outline is on top after stroke ends
-    if (ctx && shape) {
-      CanvasUtils.clearCanvas(ctx, canvasSize.width, canvasSize.height);
-      ctx.drawImage(paintCanvasRef.current!, 0, 0);
-      CanvasUtils.drawShapeOutline(ctx, shape);
-    }
   };
 
   const resetStats = () => {
@@ -207,22 +214,59 @@ export default function PaintCanvas() {
 
   const handleShapeChange = (index: number) => {
     changeShape(index);
-    // clear paint layer whenever shape changes
-    if (paintCtxRef.current) {
-      paintCtxRef.current.clearRect(0, 0, canvasSize.width, canvasSize.height);
-    }
+    setLines([]);
     resetStats();
   };
 
   const resetCanvas = () => {
-    if (paintCtxRef.current) {
-      paintCtxRef.current.clearRect(0, 0, canvasSize.width, canvasSize.height);
-    }
-    if (ctx && shape) {
-      CanvasUtils.clearCanvas(ctx, canvasSize.width, canvasSize.height);
-      CanvasUtils.drawShapeOutline(ctx, shape);
-    }
+    setLines([]);
     resetStats();
+  };
+
+  const renderShapeOutline = () => {
+    if (!shape) return null;
+
+    const commonProps = {
+      fill: 'transparent',
+      stroke: '#111111',
+      strokeWidth: 3,
+    };
+
+    if (shape.type === 'rect') {
+      return (
+        <Rect
+          x={shape.x}
+          y={shape.y}
+          width={shape.width}
+          height={shape.height}
+          {...commonProps}
+        />
+      );
+    }
+
+    if (shape.type === 'circle') {
+      return (
+        <Circle
+          x={shape.cx}
+          y={shape.cy}
+          radius={shape.r}
+          {...commonProps}
+        />
+      );
+    }
+
+    if (shape.type === 'polygon' && shape.points?.length > 0) {
+      const points = shape.points.flat();
+      return (
+        <Line
+          points={points}
+          closed={true}
+          {...commonProps}
+        />
+      );
+    }
+
+    return null;
   };
 
   if (loading) {
@@ -325,24 +369,57 @@ export default function PaintCanvas() {
         </div>
 
         <div className="mb-4 flex justify-center">
-          <canvas
-            ref={canvasRef}
-            width={canvasSize.width}
-            height={canvasSize.height}
-            className="border-2 border-gray-300 rounded-lg shadow-sm bg-white touch-none"
+          <div 
+            className="border-2 border-gray-300 rounded-lg shadow-sm bg-white"
             style={{
               width: `${canvasSize.width}px`,
               height: `${canvasSize.height}px`,
               maxWidth: '100%',
-              touchAction: 'none',
-              cursor: brushColor ? 'crosshair' : 'default',
             }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={endStroke}
-            onPointerLeave={endStroke}
-            onPointerCancel={endStroke}
-          />
+          >
+            <Stage
+              ref={stageRef}
+              width={canvasSize.width}
+              height={canvasSize.height}
+              onMouseDown={onPointerDown}
+              onMouseMove={onPointerMove}
+              onMouseUp={onPointerUp}
+              onTouchStart={onPointerDown}
+              onTouchMove={onPointerMove}
+              onTouchEnd={onPointerUp}
+              style={{
+                cursor: brushColor ? 'crosshair' : 'default',
+              }}
+            >
+              <Layer>
+                {/* White background */}
+                <Rect
+                  x={0}
+                  y={0}
+                  width={canvasSize.width}
+                  height={canvasSize.height}
+                  fill="white"
+                />
+                
+                {/* Drawn lines */}
+                {lines.map((line, i) => (
+                  <Line
+                    key={i}
+                    points={line.points}
+                    stroke={line.stroke}
+                    strokeWidth={line.strokeWidth}
+                    tension={line.tension}
+                    lineCap={line.lineCap}
+                    lineJoin={line.lineJoin}
+                    globalCompositeOperation="source-over"
+                  />
+                ))}
+                
+                {/* Shape outline */}
+                {renderShapeOutline()}
+              </Layer>
+            </Stage>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
